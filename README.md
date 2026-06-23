@@ -1,6 +1,6 @@
 # clv-forge
 
-ETL pipeline for ShopData Inc.
+ETL pipeline for ShopData Inc. - clean raw SQLite data into analytics.db for Customer Lifetime Value reporting.
 
 ## Setup
 
@@ -12,29 +12,41 @@ pip install -r requirements.txt
 
 Place shopdata.db in the project root (provided separately).
 
-## Data Exploration
+## Run the pipeline
 
-Run exploration queries:
+```powershell
+python pipeline.py
+```
+
+Creates analytics.db with dim_customers and fct_orders.
+
+## Run tests
+
+```powershell
+pytest -v
+```
+
+## SQL scripts
+
+Exploration (raw data):
 
 ```powershell
 python run_exploration.py
 ```
 
-Or with SQLite CLI:
+CLV report (requires analytics.db from pipeline):
 
 ```powershell
-sqlite3 shopdata.db ".read exploration.sql"
+sqlite3 analytics.db < clv_report.sql
 ```
 
-### Findings
+## Data Exploration Findings
 
-At least three distinct data quality issues in the raw views:
+1. **Duplicate customers** - customer_id 1 and 2 each appear twice with different signup_date and contact details. Requires deduplication keeping the latest signup.
 
-1. **Duplicate customers** - customer_id 1 and 2 each appear twice with different signup_date and contact details (e.g. customer 1: 2023-01-15 vs 2023-06-01). Requires deduplication keeping the latest signup.
+2. **Invalid order amounts** - 3 orders have total_amount <= 0 (orders 103, 113, 114).
 
-2. **Invalid order amounts** - 3 orders have total_amount <= 0 (orders 103, 113, 114), including negative values flagged as SYSTEM_ERROR and a zero-amount completed order.
-
-3. **Inconsistent phone formats** - 8 rows contain non-numeric characters (+1 (555) 123-4567, Ext 444, 1-800-555-DINO, etc.). Requires stripping to digits only.
+3. **Inconsistent phone formats** - 8 rows contain non-numeric characters. Requires stripping to digits only.
 
 4. **Missing / incomplete fields** - 2 null emails, 2 null phones, 2 null currencies, and 1 null order_date (order 117).
 
