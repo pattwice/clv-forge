@@ -1,8 +1,62 @@
+import logging
 import re
+import sqlite3
+from pathlib import Path
 
 import pandas as pd
+from prefect import flow, task
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+SOURCE_DB = Path(__file__).parent / "shopdata.db"
+ANALYTICS_DB = Path(__file__).parent / "analytics.db"
 DEFAULT_EMAIL = "unknown@domain.com"
+
+
+@task(name="extract_customers")
+def extract_customers(db_path: Path = SOURCE_DB) -> pd.DataFrame:
+    logger.info("Extracting customers from %s", db_path)
+    try:
+        if not db_path.exists():
+            raise FileNotFoundError(f"Source database not found: {db_path}")
+        with sqlite3.connect(db_path) as conn:
+            df = pd.read_sql("SELECT * FROM vw_raw_customers", conn)
+        logger.info("Extracted %s customer rows", len(df))
+        return df
+    except Exception:
+        logger.exception("Failed to extract customers")
+        raise
+
+
+@task(name="extract_orders")
+def extract_orders(db_path: Path = SOURCE_DB) -> pd.DataFrame:
+    logger.info("Extracting orders from %s", db_path)
+    try:
+        if not db_path.exists():
+            raise FileNotFoundError(f"Source database not found: {db_path}")
+        with sqlite3.connect(db_path) as conn:
+            df = pd.read_sql("SELECT * FROM vw_raw_orders", conn)
+        logger.info("Extracted %s order rows", len(df))
+        return df
+    except Exception:
+        logger.exception("Failed to extract orders")
+        raise
+
+
+@task(name="extract_exchange_rates")
+def extract_exchange_rates(db_path: Path = SOURCE_DB) -> pd.DataFrame:
+    logger.info("Extracting exchange rates from %s", db_path)
+    try:
+        if not db_path.exists():
+            raise FileNotFoundError(f"Source database not found: {db_path}")
+        with sqlite3.connect(db_path) as conn:
+            df = pd.read_sql("SELECT * FROM vw_exchange_rates", conn)
+        logger.info("Extracted %s exchange rate rows", len(df))
+        return df
+    except Exception:
+        logger.exception("Failed to extract exchange rates")
+        raise
 
 
 def standardize_phone(phone) -> str | None:
@@ -65,3 +119,69 @@ def clean_orders(orders: pd.DataFrame, rates: pd.DataFrame) -> pd.DataFrame:
         axis=1,
     )
     return df.reset_index(drop=True)
+
+
+@task(name="transform_customers")
+def transform_customers(customers: pd.DataFrame) -> pd.DataFrame:
+    logger.info("Transforming %s customer rows", len(customers))
+    try:
+        df = clean_customers(customers)
+        logger.info("Transformed to %s customer rows", len(df))
+        return df
+    except Exception:
+        logger.exception("Failed to transform customers")
+        raise
+
+
+@task(name="transform_orders")
+def transform_orders(orders: pd.DataFrame, rates: pd.DataFrame) -> pd.DataFrame:
+    logger.info("Transforming %s order rows", len(orders))
+    try:
+        df = clean_orders(orders, rates)
+        logger.info("Transformed to %s order rows", len(df))
+        return df
+    except Exception:
+        logger.exception("Failed to transform orders")
+        raise
+
+
+@task(name="load_customers")
+def load_customers(customers: pd.DataFrame, db_path: Path = ANALYTICS_DB) -> None:
+    logger.info("Loading %s rows into dim_customers at %s", len(customers), db_path)
+    try:
+        with sqlite3.connect(db_path) as conn:
+            customers.to_sql("dim_customers", conn, if_exists="replace", index=False)
+        logger.info("Loaded dim_customers successfully")
+    except Exception:
+        logger.exception("Failed to load dim_customers")
+        raise
+
+
+@task(name="load_orders")
+def load_orders(orders: pd.DataFrame, db_path: Path = ANALYTICS_DB) -> None:
+    logger.info("Loading %s rows into fct_orders at %s", len(orders), db_path)
+    try:
+        with sqlite3.connect(db_path) as conn:
+            orders.to_sql("fct_orders", conn, if_exists="replace", index=False)
+        logger.info("Loaded fct_orders successfully")
+    except Exception:
+        logger.exception("Failed to load fct_orders")
+        raise
+
+
+@flow(name="shopdata_etl_flow")
+def shopdata_etl_flow(
+    source_db: Path = SOURCE_DB,
+    analytics_db: Path = ANALYTICS_DB,
+) -> None:
+    logger.info("Starting ETL flow: %s -> %s", source_db, analytics_db)
+    rates = extract_exchange_rates(source_db)
+    customers = transform_customers(extract_customers(source_db))
+    orders = transform_orders(extract_orders(source_db), rates)
+    load_customers(customers, analytics_db)
+    load_orders(orders, analytics_db)
+    logger.info("ETL flow completed successfully")
+
+
+if __name__ == "__main__":
+    shopdata_etl_flow()
