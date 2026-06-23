@@ -1,2 +1,5 @@
 .cursor/
 venv/
+__pycache__/
+.pytest_cache/
+analytics.db
